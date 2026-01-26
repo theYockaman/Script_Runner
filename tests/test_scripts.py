@@ -1,0 +1,92 @@
+import os
+import time
+import stat
+from pathlib import Path
+
+from fastapi.testclient import TestClient
+
+from app import main as app_main
+
+
+CLIENT = TestClient(app_main.app)
+ROOT = Path(__file__).resolve().parents[1]
+SCRIPTS_DIR = ROOT / "scripts"
+
+
+def ensure_scripts_dir():
+    SCRIPTS_DIR.mkdir(exist_ok=True)
+
+
+def make_executable(p: Path):
+    mode = p.stat().st_mode
+    p.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+
+def poll_for_runs(script_id: int, timeout: int = 10):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        r = CLIENT.get(f"/api/scripts/{script_id}/logs")
+        if r.status_code == 200 and len(r.json()) > 0:
+            return r.json()
+        time.sleep(0.5)
+    raise AssertionError("No runs appeared within timeout")
+
+
+def test_run_various_scripts_and_retries():
+    ensure_scripts_dir()
+
+    # create a simple bash script
+    bash_script = SCRIPTS_DIR / "test_echo.sh"
+    bash_script.write_text("""#!/usr/bin/env bash\necho hello from bash\nexit 0\n""")
+    make_executable(bash_script)
+
+    # create a python script
+    py_script = SCRIPTS_DIR / "test_py.py"
+    py_script.write_text("""#!/usr/bin/env python3\nprint('hello from python')\n""")
+    make_executable(py_script)
+
+    # create a failing script
+    fail_script = SCRIPTS_DIR / "test_fail.sh"
+    fail_script.write_text("""#!/usr/bin/env bash\necho failing; exit 2\n""")
+    make_executable(fail_script)
+
+    # create entries via API
+    for cmd, name in [("/app/scripts/test_echo.sh", "bash-echo"), ("/app/scripts/test_py.py", "py-echo"), ("/app/scripts/test_fail.sh", "fail")]:
+        payload = {"name": name, "command": cmd, "schedule": None, "enabled": True}
+        r = CLIENT.post("/api/scripts", json=payload)
+        assert r.status_code == 200
+        data = r.json()
+        assert data["name"] == name
+
+    # fetch scripts to get IDs
+    r = CLIENT.get("/api/scripts")
+    assert r.status_code == 200
+    scripts = {s['name']: s for s in r.json()}
+
+    # run each and assert outputs
+    for name, expected_exit in [("bash-echo", 0), ("py-echo", 0), ("fail", 2)]:
+        sid = scripts[name]['id']
+        r = CLIENT.post(f"/api/scripts/{sid}/run")
+        assert r.status_code == 200
+        # poll for run
+        runs = poll_for_runs(sid, timeout=15)
+        assert len(runs) >= 1
+        last = runs[0]
+        # exit code check (fail may be non-zero)
+        assert last['exit_code'] == expected_exit
+
+    # test repeated runs for idempotency / multiple entries
+    sid = scripts['bash-echo']['id']
+    CLIENT.post(f"/api/scripts/{sid}/run")
+    CLIENT.post(f"/api/scripts/{sid}/run")
+    runs = poll_for_runs(sid, timeout=15)
+    # expect at least 2 runs total
+    assert len(runs) >= 2
+
+
+def test_frontend_bundle_present():
+    root = Path(__file__).resolve().parents[1]
+    index = root / "frontend" / "index.html"
+    assert index.exists()
+    content = index.read_text()
+    assert "Script Runner" in content

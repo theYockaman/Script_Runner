@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Script Runner</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css" />
+    <style>
+        :root {
+            --pico-border-radius: 0.25rem;
+        }
+        body > main {
+            padding: 2rem;
+        }
+        .logs-popup {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 80vw;
+            max-width: 900px;
+            max-height: 80vh;
+            background: var(--pico-card-background-color);
+            border: 1px solid var(--pico-card-border-color);
+            box-shadow: var(--pico-card-box-shadow);
+            z-index: 1000;
+            overflow-y: auto;
+        }
+        pre {
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            background-color: var(--pico-muted-background-color);
+            padding: 1rem;
+            border-radius: var(--pico-border-radius);
+        }
+        .close-btn {
+            float: right;
+            cursor: pointer;
+            border: none;
+            background: none;
+        }
+    </style>
+</head>
+<body>
+    <main class="container">
+        <header>
+            <h1>Script Runner</h1>
+            <p>Manage and run your scheduled and ad-hoc scripts.</p>
+            <button id="new-script-btn">New Script</button>
+        </header>
+
+        <figure>
+            <table role="grid" id="scripts-table">
+                <thead>
+                    <tr>
+                        <th scope="col">Name</th>
+                        <th scope="col">Schedule</th>
+                        <th scope="col">Command</th>
+                        <th scope="col">Status</th>
+                        <th scope="col">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <!-- Script rows will be inserted here -->
+                </tbody>
+            </table>
+        </figure>
+
+    </main>
+
+    <!-- Add/Edit Script Dialog -->
+    <dialog id="script-dialog">
+        <article>
+            <header>
+                <a href="#close" aria-label="Close" class="close" data-target="script-dialog" onClick="toggleDialog(event)"></a>
+                <h3 id="dialog-title">Add New Script</h3>
+            </header>
+            <form id="script-form">
+                <input type="hidden" id="script-id" name="id">
+                <label for="name">Name</label>
+                <input type="text" id="name" name="name" placeholder="e.g., Daily Backup" required>
+                
+                <label for="command">Command</label>
+                <input type="text" id="command" name="command" placeholder="e.g., /bin/bash backup.sh" required>
+
+                <label for="schedule">Cron Schedule (optional)</label>
+                <input type="text" id="schedule" name="schedule" placeholder="e.g., 0 2 * * * (for 2 AM daily)">
+
+                <label for="env">Environment Variables (optional)</label>
+                <textarea id="env" name="env" rows="3" placeholder="e.g., API_KEY=123...&#10;SECRET=abc..."></textarea>
+
+                <label>
+                    <input type="checkbox" id="enabled" name="enabled" checked>
+                    Enabled
+                </label>
+
+                <footer>
+                    <button type="button" class="secondary" data-target="script-dialog" onClick="toggleDialog(event)">Cancel</button>
+                    <button type="submit" id="save-script-btn">Save</button>
+                </footer>
+            </form>
+        </article>
+    </dialog>
+
+    <!-- Logs Dialog -->
+    <dialog id="logs-dialog">
+        <article>
+             <header>
+                <a href="#close" aria-label="Close" class="close" data-target="logs-dialog" onClick="toggleDialog(event)"></a>
+                <h3 id="logs-title">Execution Logs</h3>
+            </header>
+            <pre id="logs-content">Loading...</pre>
+        </article>
+    </dialog>
+
+
+    <script>
+        const API_BASE_URL = "/api";
+        const scriptsTableBody = document.querySelector("#scripts-table tbody");
+        const scriptDialog = document.getElementById('script-dialog');
+        const scriptForm = document.getElementById('script-form');
+        const dialogTitle = document.getElementById('dialog-title');
+        const newScriptBtn = document.getElementById('new-script-btn');
+        const logsDialog = document.getElementById('logs-dialog');
+        const logsContent = document.getElementById('logs-content');
+        const logsTitle = document.getElementById('logs-title');
+
+        // --- Dialog Control ---
+        const toggleDialog = (event) => {
+            event.preventDefault();
+            const dialog = document.getElementById(event.currentTarget.dataset.target);
+            if (dialog) {
+                dialog.open ? dialog.close() : dialog.showModal();
+            }
+        }
+
+        newScriptBtn.addEventListener('click', () => {
+            scriptForm.reset();
+            document.getElementById('script-id').value = '';
+            dialogTitle.textContent = 'Add New Script';
+            scriptDialog.showModal();
+        });
+
+        // --- API Calls ---
+        async function fetchApi(endpoint, options = {}) {
+            const url = `${API_BASE_URL}${endpoint}`;
+            try {
+                const response = await fetch(url, options);
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    throw new Error(`HTTP error! status: ${response.status}, message: ${errorText}`);
+                }
+                // Handle no-content responses
+                if (response.status === 204 || response.headers.get('content-length') === '0') {
+                    return null;
+                }
+                return response.json();
+            } catch (error) {
+                console.error(`API call to ${url} failed:`, error);
+                alert(`An error occurred: ${error.message}`);
+                return null;
+            }
+        }
+
+        // --- Main Functions ---
+        async function refreshScripts() {
+            const scripts = await fetchApi('/scripts');
+            scriptsTableBody.innerHTML = '';
+            if (!scripts) return;
+
+            scripts.forEach(script => {
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td>${script.name}</td>
+                    <td>${script.schedule || 'Not scheduled'}</td>
+                    <td><code>${script.command}</code></td>
+                    <td>
+                        <span class="${script.enabled ? 'text-success' : 'text-error'}">${script.enabled ? 'Enabled' : 'Disabled'}</span>
+                    </td>
+                    <td>
+                        <button class="outline" onclick="runScript(${script.id})">Run</button>
+                        <button class="outline" onclick="viewLogs(${script.id}, '${script.name}')">Logs</button>
+                        <button class="secondary outline" onclick="editScript(${script.id})">Edit</button>
+                        <button class="contrast outline" onclick="deleteScript(${script.id})">Delete</button>
+                    </td>
+                `;
+                scriptsTableBody.appendChild(row);
+            });
+        }
+
+        async function runScript(id) {
+            await fetchApi(`/scripts/${id}/run`, { method: 'POST' });
+            alert('Script execution started. Check logs for output.');
+            refreshScripts();
+        }
+
+        async function viewLogs(id, name) {
+            logsTitle.textContent = `Logs for "${name}"`;
+            logsContent.textContent = 'Loading...';
+            logsDialog.showModal();
+            const logs = await fetchApi(`/scripts/${id}/logs`);
+            if (logs && logs.length > 0) {
+                logsContent.textContent = logs.map(log => 
+`Run at: ${new Date(log.started_at).toLocaleString()}
+Finished at: ${log.finished_at ? new Date(log.finished_at).toLocaleString() : 'N/A'}
+Exit Code: ${log.exit_code}
+----------------- STDOUT -----------------
+${log.stdout || '(empty)'}
+----------------- STDERR -----------------
+${log.stderr || '(empty)'}`
+                ).join('\n\n========================================\n\n');
+            } else {
+                logsContent.textContent = 'No logs found for this script.';
+            }
+        }
+
+        async function editScript(id) {
+            const script = await fetchApi(`/scripts/${id}`);
+            if (!script) return;
+
+            document.getElementById('script-id').value = script.id;
+            document.getElementById('name').value = script.name;
+            document.getElementById('command').value = script.command;
+            document.getElementById('schedule').value = script.schedule || '';
+            document.getElementById('env').value = script.env || '';
+            document.getElementById('enabled').checked = script.enabled;
+            
+            dialogTitle.textContent = 'Edit Script';
+            scriptDialog.showModal();
+        }
+
+        async function deleteScript(id) {
+            if (confirm('Are you sure you want to delete this script and all its logs?')) {
+                await fetchApi(`/scripts/${id}`, { method: 'DELETE' });
+                refreshScripts();
+            }
+        }
+
+        scriptForm.addEventListener('submit', async (event) => {
+            event.preventDefault();
+            const id = document.getElementById('script-id').value;
+            const formData = new FormData(scriptForm);
+            const payload = Object.fromEntries(formData.entries());
+            
+            // Handle checkbox
+            payload.enabled = document.getElementById('enabled').checked;
+
+            const endpoint = id ? `/scripts/${id}` : '/scripts';
+            const method = id ? 'PUT' : 'POST';
+
+            await fetchApi(endpoint, {
+                method: method,
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+
+            scriptDialog.close();
+            refreshScripts();
+        });
+
+        // Initial load
+        document.addEventListener('DOMContentLoaded', refreshScripts);
+    </script>
+</body>
+</html>
