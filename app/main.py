@@ -88,8 +88,7 @@ class ScriptOut(BaseModel):
     schedule: Optional[str]
     enabled: bool
     class Config:
-        # pydantic v2 renamed `orm_mode` -> `from_attributes`
-        from_attributes = True
+        orm_mode = True
 
 
 def get_db():
@@ -100,56 +99,75 @@ def get_db():
         db.close()
 
 
-def schedule_job_for_script(db: Session, script: Script):
-    job_id = f"script-{script.id}"
-    # remove existing job if any
-    try:
-        scheduler.remove_job(job_id)
-    except Exception:
-        pass
+def schedule_script(db: Session, script: Script):
+    """(Re)schedules a single script."""
+    # always remove before adding
+    if scheduler.get_job(str(script.id)):
+        scheduler.remove_job(str(script.id))
 
-    if script.schedule and script.enabled:
+    if script.enabled and script.schedule:
         try:
-            trigger = CronTrigger.from_crontab(script.schedule)
-            scheduler.add_job(lambda: run_script(script.id), trigger=trigger, id=job_id)
-        except Exception as e:
+            # Support both 5-part and 6-part cron expressions
+            parts = script.schedule.split()
+            if len(parts) == 6:
+                trigger = CronTrigger(
+                    second=parts[0],
+                    minute=parts[1],
+                    hour=parts[2],
+                    day=parts[3],
+                    month=parts[4],
+                    day_of_week=parts[5],
+                    timezone="UTC",
+                )
+            else:
+                trigger = CronTrigger.from_crontab(script.schedule, timezone="UTC")
+
+            scheduler.add_job(
+                run_script,
+                trigger=trigger,
+                args=[script.id],
+                id=str(script.id),
+                name=script.name,
+                replace_existing=True,
+            )
+        except ValueError as e:
             print(f"Failed to schedule script {script.id}: {e}")
+            # This will be caught by the endpoint and return a 422
+            raise e
 
 
 def run_script(script_id: int):
-    # each run uses its own DB session
+    """Execute a script command."""
     db = SessionLocal()
     script = db.query(Script).filter(Script.id == script_id).first()
     if not script or not script.enabled:
         db.close()
         return
 
-    run = Run(script_id=script.id, started_at=datetime.utcnow())
+    run = Run(script_id=script.id)
     db.add(run)
     db.commit()
     db.refresh(run)
 
     try:
-        env = os.environ.copy()
-        # merge env if provided as JSON-like or KEY=VALUE lines - keep simple
-        if script.env:
-            # expecting KEY=VALUE lines separated by newlines
-            for line in script.env.splitlines():
-                if "=" in line:
-                    k, v = line.split("=", 1)
-                    env[k.strip()] = v.strip()
-
-        completed = subprocess.run(script.command, shell=True, cwd=SCRIPTS_DIR, capture_output=True, text=True)
-        run.exit_code = completed.returncode
-        run.stdout = completed.stdout
-        run.stderr = completed.stderr
-        run.finished_at = datetime.utcnow()
+        # The command is executed with shell=True, so we can pass the command string directly.
+        # This allows running shell scripts, python scripts with a shebang, or any other command.
+        result = subprocess.run(
+            script.command,
+            shell=True,
+            capture_output=True,
+            text=True,
+            cwd=SCRIPTS_DIR,
+            check=False,
+        )
+        run.exit_code = result.returncode
+        run.stdout = result.stdout
+        run.stderr = result.stderr
     except Exception as e:
         run.exit_code = -1
         run.stderr = str(e)
-        run.finished_at = datetime.utcnow()
     finally:
-        db.add(run)
+        run.finished_at = datetime.utcnow()
         db.commit()
         db.close()
 
@@ -158,7 +176,7 @@ def reschedule_all():
     db = SessionLocal()
     scripts = db.query(Script).all()
     for s in scripts:
-        schedule_job_for_script(db, s)
+        schedule_script(db, s)
     db.close()
 
 
@@ -200,21 +218,19 @@ def get_script(script_id: int):
 
 
 @app.post("/api/scripts", response_model=ScriptOut)
-def create_script(payload: ScriptCreate):
+def create_script(script: ScriptCreate):
     db = SessionLocal()
-    script = Script(
-        name=payload.name,
-        command=payload.command,
-        schedule=payload.schedule,
-        enabled=payload.enabled,
-        env=payload.env,
-    )
-    db.add(script)
-    db.commit()
-    db.refresh(script)
-    schedule_job_for_script(db, script)
-    db.close()
-    return script
+    try:
+        db_script = Script(**script.dict())
+        db.add(db_script)
+        db.commit()
+        db.refresh(db_script)
+        schedule_script(db, db_script)
+        return db_script
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    finally:
+        db.close()
 
 
 @app.put("/api/scripts/{script_id}", response_model=ScriptOut)
@@ -231,7 +247,7 @@ def update_script(script_id: int, payload: ScriptUpdate):
     db.add(script)
     db.commit()
     db.refresh(script)
-    schedule_job_for_script(db, script)
+    schedule_script(db, script)
     db.close()
     return script
 
