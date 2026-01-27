@@ -161,7 +161,7 @@ def run_script(script_id: int):
             shell=True,
             capture_output=True,
             text=True,
-            cwd=SCRIPTS_DIR,
+            cwd=script_dir, # Run from the script's own directory
             check=False,
         )
         run.exit_code = result.returncode
@@ -303,3 +303,19 @@ def get_logs(script_id: int, limit: int = 20):
         }
         for r in runs
     ]
+
+
+def convert_line_endings(file_path):
+    """Converts a file's line endings from CRLF to LF."""
+    try:
+        with open(file_path, 'rb') as f:
+            content = f.read()
+        
+        # Only write back if changes are needed
+        if b'\r\n' in content:
+            content = content.replace(b'\r\n', b'\n')
+            with open(file_path, 'wb') as f:
+                f.write(content)
+    except Exception as e:
+        # Log the error but don't block execution
+        print(f"Could not convert line endings for {file_path}: {e}")

@@ -170,3 +170,55 @@ def test_api_validation():
     # Update non-existent script
     r = CLIENT.put("/api/scripts/99999", json={"enabled": False})
     assert r.status_code == 404
+
+
+def test_run_python_and_bash():
+    """
+    Tests that both a python script and a bash script can be executed.
+    """
+    ensure_scripts_dir()
+
+    # Create a bash script
+    bash_script_path = SCRIPTS_DIR / "test_bash.sh"
+    bash_script_path.write_text("#!/bin/bash\necho 'hello from bash'")
+    make_executable(bash_script_path)
+
+    # Create a python script
+    python_script_path = SCRIPTS_DIR / "test_python.py"
+    python_script_path.write_text("print('hello from python')")
+    make_executable(python_script_path)
+
+    # Add scripts to the db
+    bash_payload = {
+        "name": "bash-test-script",
+        "command": str(bash_script_path.relative_to(ROOT)),
+        "enabled": True
+    }
+    python_payload = {
+        "name": "python-test-script",
+        "command": str(python_script_path.relative_to(ROOT)),
+        "enabled": True
+    }
+
+    bash_response = CLIENT.post("/api/scripts", json=bash_payload)
+    assert bash_response.status_code == 200
+    bash_script_id = bash_response.json()["id"]
+
+    python_response = CLIENT.post("/api/scripts", json=python_payload)
+    assert python_response.status_code == 200
+    python_script_id = python_response.json()["id"]
+
+    # Run scripts
+    CLIENT.post(f"/api/scripts/{bash_script_id}/run")
+    CLIENT.post(f"/api/scripts/{python_script_id}/run")
+
+    # Verify runs
+    bash_runs = poll_for_runs(bash_script_id, timeout=15)
+    assert len(bash_runs) >= 1
+    assert bash_runs[0]['exit_code'] == 0
+    assert 'hello from bash' in bash_runs[0]['stdout']
+
+    python_runs = poll_for_runs(python_script_id, timeout=15)
+    assert len(python_runs) >= 1
+    assert python_runs[0]['exit_code'] == 0
+    assert 'hello from python' in python_runs[0]['stdout']
