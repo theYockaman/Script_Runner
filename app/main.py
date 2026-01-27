@@ -150,10 +150,14 @@ def run_script(script_id: int):
     db.refresh(run)
 
     try:
+        command_to_run = script.command
+        if command_to_run.endswith(".py"):
+            command_to_run = f"python -u {command_to_run}"
+
         # The command is executed with shell=True, so we can pass the command string directly.
         # This allows running shell scripts, python scripts with a shebang, or any other command.
         result = subprocess.run(
-            script.command,
+            command_to_run,
             shell=True,
             capture_output=True,
             text=True,
