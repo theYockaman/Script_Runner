@@ -150,14 +150,37 @@ def run_script(script_id: int):
     db.refresh(run)
 
     try:
-        # The command is executed with shell=True, so we can pass the command string directly.
-        # This allows running shell scripts, python scripts with a shebang, or any other command.
+        script_path = os.path.abspath(os.path.join(SCRIPTS_DIR, script.command))
+        
+        # Automatically fix line endings before execution
+        convert_line_endings(script_path)
+
+        script_dir = os.path.dirname(script_path)
+        requirements_path = os.path.join(script_dir, 'requirements.txt')
+
+        command_to_run = script.command
+
+        # If it's a python script with a requirements.txt, manage a virtual environment
+        if command_to_run.endswith(".py") and os.path.exists(requirements_path):
+            venv_path = os.path.join(script_dir, '.venv')
+            python_executable = os.path.join(venv_path, 'bin', 'python')
+
+            # Create venv and install dependencies if not already done
+            if not os.path.exists(python_executable):
+                subprocess.run(['python', '-m', 'venv', venv_path], cwd=script_dir, check=True)
+                subprocess.run([python_executable, '-m', 'pip', 'install', '-r', requirements_path], cwd=script_dir, check=True)
+
+            command_to_run = f"{python_executable} -u {os.path.basename(script_path)}"
+        elif command_to_run.endswith(".py"):
+            command_to_run = f"python -u {command_to_run}"
+
+        # Execute the command
         result = subprocess.run(
-            script.command,
+            command_to_run,
             shell=True,
             capture_output=True,
             text=True,
-            cwd=SCRIPTS_DIR,
+            cwd=script_dir, # Run from the script's own directory
             check=False,
         )
         run.exit_code = result.returncode
@@ -299,3 +322,19 @@ def get_logs(script_id: int, limit: int = 20):
         }
         for r in runs
     ]
+
+
+def convert_line_endings(file_path):
+    """Converts a file's line endings from CRLF to LF."""
+    try:
+        with open(file_path, 'rb') as f:
+            content = f.read()
+        
+        # Only write back if changes are needed
+        if b'\r\n' in content:
+            content = content.replace(b'\r\n', b'\n')
+            with open(file_path, 'wb') as f:
+                f.write(content)
+    except Exception as e:
+        # Log the error but don't block execution
+        print(f"Could not convert line endings for {file_path}: {e}")
