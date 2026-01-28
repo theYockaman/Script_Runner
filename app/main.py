@@ -137,7 +137,7 @@ def schedule_script(db: Session, script: Script):
 
 
 def run_script(script_id: int):
-    """Execute a script command."""
+    """Execute a script command, with retries for missing modules."""
     db = SessionLocal()
     script = db.query(Script).filter(Script.id == script_id).first()
     if not script or not script.enabled:
@@ -150,23 +150,62 @@ def run_script(script_id: int):
     db.refresh(run)
 
     try:
+        script_path = os.path.abspath(os.path.join(SCRIPTS_DIR, script.command))
+        convert_line_endings(script_path)
+        script_dir = os.path.dirname(script_path)
+
         command_to_run = script.command
         if command_to_run.endswith(".py"):
             command_to_run = f"python -u {command_to_run}"
 
-        # The command is executed with shell=True, so we can pass the command string directly.
-        # This allows running shell scripts, python scripts with a shebang, or any other command.
-        result = subprocess.run(
-            command_to_run,
-            shell=True,
-            capture_output=True,
-            text=True,
-            cwd=script_dir, # Run from the script's own directory
-            check=False,
-        )
-        run.exit_code = result.returncode
-        run.stdout = result.stdout
-        run.stderr = result.stderr
+        for attempt in range(2): # Allow one retry after installing a module
+            result = subprocess.run(
+                command_to_run,
+                shell=True,
+                capture_output=True,
+                text=True,
+                cwd=script_dir,
+                check=False,
+            )
+
+            # If successful or it's the last attempt, break the loop
+            if result.returncode == 0 or attempt == 1:
+                run.exit_code = result.returncode
+                run.stdout = result.stdout
+                run.stderr = result.stderr
+                break
+
+            # Check for "ModuleNotFoundError" and try to install the package
+            stderr_lower = result.stderr.lower()
+            if "modulenotfounderror: no module named" in stderr_lower:
+                try:
+                    # Extract module name (e.g., "No module named 'requests'" -> "requests")
+                    module_name = result.stderr.split("'")[1]
+                    print(f"Attempting to install missing module: {module_name}")
+                    
+                    # Install the module using pip
+                    install_result = subprocess.run(
+                        ["pip", "install", module_name],
+                        capture_output=True,
+                        text=True,
+                        check=True
+                    )
+                    print(f"Installation of {module_name} successful.")
+                    # Loop again to retry running the script
+                    continue
+                except (IndexError, subprocess.CalledProcessError) as install_error:
+                    print(f"Failed to automatically install module: {install_error}")
+                    run.exit_code = result.returncode
+                    run.stdout = result.stdout
+                    run.stderr = result.stderr + f"\n\n[Copilot-Agent] Failed to auto-install dependency: {str(install_error)}"
+                    break # Stop retrying if installation fails
+            else:
+                # If it's a different error, don't retry
+                run.exit_code = result.returncode
+                run.stdout = result.stdout
+                run.stderr = result.stderr
+                break
+
     except Exception as e:
         run.exit_code = -1
         run.stderr = str(e)
