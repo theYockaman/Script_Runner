@@ -4,6 +4,7 @@ import subprocess
 import threading
 from datetime import datetime
 from typing import List, Optional
+import pytz
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -17,6 +18,7 @@ from fastapi.responses import HTMLResponse
 # Config
 DB_PATH = os.environ.get("DATABASE_URL", "sqlite:///app/data/data.db")
 SCRIPTS_DIR = os.environ.get("SCRIPTS_DIR", "/app/scripts")
+CENTRAL_TZ = pytz.timezone('America/Chicago')
 
 # If using a SQLite file URL, ensure the parent directory exists before creating the engine.
 if DB_PATH.startswith("sqlite:///"):
@@ -43,15 +45,15 @@ class Script(Base):
     schedule = Column(String(100), nullable=True)
     enabled = Column(Boolean, default=True)
     env = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(CENTRAL_TZ))
+    updated_at = Column(DateTime, default=lambda: datetime.now(CENTRAL_TZ), onupdate=lambda: datetime.now(CENTRAL_TZ))
 
 
 class Run(Base):
     __tablename__ = "runs"
     id = Column(Integer, primary_key=True, index=True)
     script_id = Column(Integer, nullable=False)
-    started_at = Column(DateTime, default=datetime.utcnow)
+    started_at = Column(DateTime, default=lambda: datetime.now(CENTRAL_TZ))
     finished_at = Column(DateTime, nullable=True)
     exit_code = Column(Integer, nullable=True)
     stdout = Column(Text, nullable=True)
@@ -123,10 +125,10 @@ def schedule_script(db: Session, script: Script):
                     day=parts[3],
                     month=parts[4],
                     day_of_week=parts[5],
-                    timezone="UTC",
+                    timezone="America/Chicago",
                 )
             else:
-                trigger = CronTrigger.from_crontab(script.schedule, timezone="UTC")
+                trigger = CronTrigger.from_crontab(script.schedule, timezone="America/Chicago")
 
             scheduler.add_job(
                 run_script,
@@ -220,7 +222,7 @@ def run_script(script_id: int):
         run.exit_code = -1
         run.stderr = str(e)
     finally:
-        run.finished_at = datetime.utcnow()
+        run.finished_at = datetime.now(CENTRAL_TZ)
         db.commit()
         db.close()
 
