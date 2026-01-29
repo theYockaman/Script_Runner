@@ -9,7 +9,7 @@ services:
       - ./scripts:/app/scripts
       - ./data:/app/data
     environment:
-      - DATABASE_URL=sqlite:///./data/data.db
+      - DATABASE_URL=sqlite:////app/data/data.db
       - SCRIPTS_DIR=/app/scripts
   frontend:
     build: ./frontend
