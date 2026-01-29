@@ -5,6 +5,7 @@ services:
     ports:
       - '8080:8080'
     volumes:
+      - ./app:/app/app
       - ./scripts:/app/scripts
       - ./data:/app/data
     environment:

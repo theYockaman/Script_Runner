@@ -101,14 +101,20 @@ def get_db():
 
 def schedule_script(db: Session, script: Script):
     """(Re)schedules a single script."""
+    print(f"[SCHEDULE] Attempting to schedule script {script.id}: {script.name}")
+    print(f"[SCHEDULE] Enabled: {script.enabled}, Schedule: {script.schedule}")
+    
     # always remove before adding
     if scheduler.get_job(str(script.id)):
+        print(f"[SCHEDULE] Removing existing job for script {script.id}")
         scheduler.remove_job(str(script.id))
 
     if script.enabled and script.schedule:
         try:
             # Support both 5-part and 6-part cron expressions
             parts = script.schedule.split()
+            print(f"[SCHEDULE] Cron parts: {parts}")
+            
             if len(parts) == 6:
                 trigger = CronTrigger(
                     second=parts[0],
@@ -130,10 +136,14 @@ def schedule_script(db: Session, script: Script):
                 name=script.name,
                 replace_existing=True,
             )
+            print(f"[SCHEDULE] Successfully added job {script.id} to scheduler")
+            print(f"[SCHEDULE] Scheduler now has {len(scheduler.get_jobs())} job(s)")
         except ValueError as e:
-            print(f"Failed to schedule script {script.id}: {e}")
+            print(f"[SCHEDULE] Failed to schedule script {script.id}: {e}")
             # This will be caught by the endpoint and return a 422
             raise e
+    else:
+        print(f"[SCHEDULE] Skipping scheduling (enabled={script.enabled}, schedule={script.schedule})")
 
 
 def run_script(script_id: int):
@@ -218,9 +228,19 @@ def run_script(script_id: int):
 def reschedule_all():
     db = SessionLocal()
     scripts = db.query(Script).all()
+    print(f"[STARTUP] Loading {len(scripts)} script(s) from database...")
     for s in scripts:
-        schedule_script(db, s)
+        if s.schedule:
+            print(f"[STARTUP] Scheduling script {s.id}: {s.name} with cron: {s.schedule}")
+            try:
+                schedule_script(db, s)
+                print(f"[STARTUP] Successfully scheduled script {s.id}")
+            except Exception as e:
+                print(f"[STARTUP] Failed to schedule script {s.id}: {e}")
+        else:
+            print(f"[STARTUP] Skipping script {s.id}: {s.name} (no schedule)")
     db.close()
+    print(f"[STARTUP] Scheduler now has {len(scheduler.get_jobs())} active job(s)")
 
 
 @app.on_event("startup")
@@ -228,7 +248,9 @@ def startup_event():
     # ensure folders
     os.makedirs("/app/data", exist_ok=True)
     os.makedirs(SCRIPTS_DIR, exist_ok=True)
+    print("[STARTUP] Running reschedule_all()...")
     reschedule_all()
+    print("[STARTUP] Startup complete!")
 
 
 @app.get("/", response_class=HTMLResponse)
