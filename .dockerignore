@@ -4,3 +4,4 @@ data/
 *.env
 venv/
 node_modules/
+scripts/.inline/

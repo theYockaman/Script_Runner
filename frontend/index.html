@@ -4,6 +4,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Script Runner</title>
+    <link rel="icon" type="image/svg+xml" href="logo.svg">
+    <link rel="icon" href="favicon.ico" sizes="32x32">
+    <link rel="apple-touch-icon" href="apple-touch-icon.png">
+    <meta name="theme-color" content="#4f46e5">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css" />
     <style>
         :root {
@@ -12,19 +16,21 @@
         body > main {
             padding: 2rem;
         }
-        .logs-popup {
-            position: fixed;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            width: 80vw;
-            max-width: 900px;
-            max-height: 80vh;
-            background: var(--pico-card-background-color);
-            border: 1px solid var(--pico-card-border-color);
-            box-shadow: var(--pico-card-box-shadow);
-            z-index: 1000;
-            overflow-y: auto;
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            margin-bottom: var(--pico-spacing);
+        }
+        .brand-logo {
+            flex: none;
+            width: 3.5rem;
+            height: 3.5rem;
+            border-radius: 0.875rem;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+        }
+        .brand hgroup {
+            margin-bottom: 0;
         }
         pre {
             white-space: pre-wrap;
@@ -33,20 +39,115 @@
             padding: 1rem;
             border-radius: var(--pico-border-radius);
         }
-        .close-btn {
-            float: right;
-            cursor: pointer;
-            border: none;
-            background: none;
+        #script-dialog article {
+            width: min(90vw, 56rem);
+            max-width: none;
         }
+        #code {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            font-size: 0.875rem;
+            white-space: pre;
+            overflow-x: auto;
+            tab-size: 4;
+            line-height: 1.45;
+        }
+        .form-section[hidden] {
+            display: none;
+        }
+        /* Pico sets main { display: block }, which would override the hidden attribute. */
+        main[hidden] {
+            display: none;
+        }
+        #login-view article {
+            max-width: 28rem;
+            margin: 8vh auto 0;
+        }
+        #login-view .brand {
+            margin-bottom: 0;
+        }
+        #login-error:empty, #login-hint:empty {
+            display: none;
+        }
+        .user-bar {
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            gap: 0.75rem;
+            margin-bottom: var(--pico-spacing);
+        }
+        .user-bar button {
+            width: auto;
+            margin: 0;
+            padding: 0.25rem 0.75rem;
+            font-size: 0.8rem;
+        }
+        fieldset.mode-toggle {
+            margin-bottom: var(--pico-spacing);
+        }
+        fieldset.mode-toggle label {
+            display: inline-flex;
+            align-items: center;
+            margin-right: 1.5rem;
+            margin-bottom: 0;
+        }
+        .lang-badge {
+            display: inline-block;
+            padding: 0.1rem 0.5rem;
+            border-radius: 999px;
+            font-size: 0.8rem;
+            background: var(--pico-muted-background-color);
+            border: 1px solid var(--pico-muted-border-color);
+            white-space: nowrap;
+        }
+        .text-success { color: var(--pico-ins-color); }
+        .text-error { color: var(--pico-del-color); }
+        .muted { color: var(--pico-muted-color); font-size: 0.875rem; }
+        td code { word-break: break-all; }
+        td .actions { display: flex; flex-wrap: wrap; gap: 0.25rem; }
+        td .actions button { margin: 0; padding: 0.25rem 0.6rem; font-size: 0.8rem; }
     </style>
 </head>
 <body>
-    <main class="container">
+    <!-- Login view: shown until /api/auth/status reports an authenticated session -->
+    <main id="login-view" class="container" hidden>
+        <article>
+            <header>
+                <div class="brand">
+                    <img src="logo.svg" alt="" class="brand-logo" width="56" height="56">
+                    <hgroup>
+                        <h1>Script Runner</h1>
+                        <p>Sign in to continue.</p>
+                    </hgroup>
+                </div>
+            </header>
+            <form id="login-form">
+                <label for="login-username">Username</label>
+                <input type="text" id="login-username" name="username" autocomplete="username" autocapitalize="off" spellcheck="false" required>
+                <label for="login-password">Password</label>
+                <input type="password" id="login-password" name="password" autocomplete="current-password" required>
+                <small id="login-error" class="text-error" role="alert"></small>
+                <small id="login-hint" class="muted"></small>
+                <button type="submit" id="login-btn">Sign in</button>
+            </form>
+        </article>
+    </main>
+
+    <!-- App view -->
+    <main id="app-view" class="container" hidden>
         <header>
-            <h1>Script Runner</h1>
-            <p>Manage and run your scheduled and ad-hoc scripts.</p>
+            <div class="user-bar">
+                <span class="muted">Signed in as <strong id="whoami"></strong></span>
+                <button type="button" id="logout-btn" class="secondary outline">Log out</button>
+            </div>
+            <div class="brand">
+                <img src="logo.svg" alt="" class="brand-logo" width="56" height="56">
+                <hgroup>
+                    <h1>Script Runner</h1>
+                    <p>Manage and run scheduled and ad-hoc scripts in Bash, Python, Node.js, TypeScript, PowerShell, Ruby, Perl or PHP.</p>
+                </hgroup>
+            </div>
             <button id="new-script-btn">New Script</button>
+            <p id="runtime-summary" class="muted"></p>
         </header>
 
         <figure>
@@ -54,8 +155,9 @@
                 <thead>
                     <tr>
                         <th scope="col">Name</th>
+                        <th scope="col">Language</th>
+                        <th scope="col">Source</th>
                         <th scope="col">Schedule</th>
-                        <th scope="col">Command</th>
                         <th scope="col">Status</th>
                         <th scope="col">Actions</th>
                     </tr>
@@ -79,9 +181,28 @@
                 <input type="hidden" id="script-id" name="id">
                 <label for="name">Name</label>
                 <input type="text" id="name" name="name" placeholder="e.g., Daily Backup" required>
-                
-                <label for="command">Command</label>
-                <input type="text" id="command" name="command" placeholder="e.g., /bin/bash backup.sh" required>
+
+                <label for="language">Language</label>
+                <select id="language" name="language"></select>
+                <small id="language-help">Auto-detect picks the interpreter from the file extension (.sh, .py, .js, .ts, .ps1, .rb, .pl, .php). Unknown extensions run as a plain shell command.</small>
+
+                <fieldset class="mode-toggle">
+                    <legend>Source</legend>
+                    <label><input type="radio" name="mode" value="file" checked> File path / command</label>
+                    <label><input type="radio" name="mode" value="inline"> Inline code</label>
+                </fieldset>
+
+                <div id="file-fields" class="form-section">
+                    <label for="command">Command or script path</label>
+                    <input type="text" id="command" name="command" placeholder="e.g., backup-daily.sh  or  /app/scripts/report.py --full" required>
+                    <small>Paths are inside the container; relative paths resolve from the scripts folder. Quote paths that contain spaces.</small>
+                </div>
+
+                <div id="inline-fields" class="form-section" hidden>
+                    <label for="code">Code</label>
+                    <textarea id="code" name="code" rows="14" spellcheck="false" autocomplete="off" autocapitalize="off" placeholder="print('hello from Script Runner')"></textarea>
+                    <small>Saved to the scripts folder and run with the selected language on every run. Tab inserts four spaces.</small>
+                </div>
 
                 <label for="schedule">Cron Schedule (optional)</label>
                 <input type="text" id="schedule" name="schedule" placeholder="e.g., 0 2 * * * (for 2 AM daily)">
@@ -124,6 +245,33 @@
         const logsDialog = document.getElementById('logs-dialog');
         const logsContent = document.getElementById('logs-content');
         const logsTitle = document.getElementById('logs-title');
+        const languageSelect = document.getElementById('language');
+        const commandInput = document.getElementById('command');
+        const codeInput = document.getElementById('code');
+        const fileFields = document.getElementById('file-fields');
+        const inlineFields = document.getElementById('inline-fields');
+        const runtimeSummary = document.getElementById('runtime-summary');
+        const loginView = document.getElementById('login-view');
+        const appView = document.getElementById('app-view');
+        const loginForm = document.getElementById('login-form');
+        const loginUsername = document.getElementById('login-username');
+        const loginPassword = document.getElementById('login-password');
+        const loginError = document.getElementById('login-error');
+        const loginHint = document.getElementById('login-hint');
+        const loginBtn = document.getElementById('login-btn');
+        const whoami = document.getElementById('whoami');
+        const logoutBtn = document.getElementById('logout-btn');
+
+        let languages = [];        // [{id, label, extensions, available}] from /api/languages
+        let languagesById = {};
+        let scriptsById = {};
+
+        // --- Helpers ---
+        const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (c) => ({
+            '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+        }[c]));
+
+        const languageLabel = (id) => id ? (languagesById[id] ? languagesById[id].label : id) : 'Auto';
 
         // --- Dialog Control ---
         const toggleDialog = (event) => {
@@ -134,9 +282,46 @@
             }
         }
 
+        // --- Source mode (file path vs inline code) ---
+        function currentMode() {
+            return document.querySelector('input[name="mode"]:checked').value;
+        }
+
+        function setMode(mode) {
+            document.querySelector(`input[name="mode"][value="${mode}"]`).checked = true;
+            const inline = mode === 'inline';
+            fileFields.hidden = inline;
+            inlineFields.hidden = !inline;
+            commandInput.required = !inline;
+            codeInput.required = inline;
+
+            // Inline code cannot be auto-detected: there is no file extension to look at.
+            const autoOption = languageSelect.querySelector('option[value="auto"]');
+            if (autoOption) autoOption.disabled = inline;
+            if (inline && languageSelect.value === 'auto') {
+                const preferred = languages.find(l => l.id === 'python' && l.available) || languages.find(l => l.available);
+                if (preferred) languageSelect.value = preferred.id;
+            }
+        }
+
+        document.querySelectorAll('input[name="mode"]').forEach(radio => {
+            radio.addEventListener('change', (e) => setMode(e.target.value));
+        });
+
+        // Tab inserts spaces in the code editor instead of moving focus.
+        codeInput.addEventListener('keydown', (e) => {
+            if (e.key !== 'Tab') return;
+            e.preventDefault();
+            const start = codeInput.selectionStart;
+            const end = codeInput.selectionEnd;
+            codeInput.setRangeText('    ', start, end, 'end');
+        });
+
         newScriptBtn.addEventListener('click', () => {
             scriptForm.reset();
             document.getElementById('script-id').value = '';
+            languageSelect.value = 'auto';
+            setMode('file');
             dialogTitle.textContent = 'Add New Script';
             scriptDialog.showModal();
         });
@@ -146,13 +331,25 @@
             const url = `${API_BASE_URL}${endpoint}`;
             try {
                 const response = await fetch(url, options);
+                if (response.status === 401) {
+                    showLogin('Your session has expired. Please sign in again.');
+                    return null;
+                }
                 if (!response.ok) {
-                    const errorText = await response.text();
-                    throw new Error(`HTTP error! status: ${response.status}, message: ${errorText}`);
+                    let message = await response.text();
+                    try {
+                        const parsed = JSON.parse(message);
+                        if (parsed && parsed.detail) {
+                            message = typeof parsed.detail === 'string'
+                                ? parsed.detail
+                                : parsed.detail.map(d => d.msg || JSON.stringify(d)).join('; ');
+                        }
+                    } catch (_) { /* not JSON, keep raw text */ }
+                    throw new Error(`HTTP ${response.status}: ${message}`);
                 }
                 // Handle no-content responses
                 if (response.status === 204 || response.headers.get('content-length') === '0') {
-                    return null;
+                    return { ok: true };
                 }
                 return response.json();
             } catch (error) {
@@ -162,26 +359,129 @@
             }
         }
 
+        // --- Authentication ---
+        function showLogin(message, usersConfigured = true) {
+            [scriptDialog, logsDialog].forEach(d => { if (d.open) d.close(); });
+            appView.hidden = true;
+            loginView.hidden = false;
+            scriptsTableBody.innerHTML = '';
+            scriptsById = {};
+            whoami.textContent = '';
+            loginError.textContent = message || '';
+            loginHint.textContent = usersConfigured
+                ? ''
+                : 'No users are configured. Set SCRIPT_RUNNER_USERS=user:password in the .env file and run "docker compose up -d".';
+            loginPassword.value = '';
+            loginUsername.focus();
+        }
+
+        async function enterApp(username) {
+            whoami.textContent = username;
+            loginError.textContent = '';
+            loginView.hidden = true;
+            appView.hidden = false;
+            await loadLanguages();
+            refreshScripts();
+        }
+
+        loginForm.addEventListener('submit', async (event) => {
+            event.preventDefault();
+            loginError.textContent = '';
+            loginBtn.disabled = true;
+            loginBtn.setAttribute('aria-busy', 'true');
+            try {
+                const response = await fetch(`${API_BASE_URL}/auth/login`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        username: loginUsername.value.trim(),
+                        password: loginPassword.value,
+                    }),
+                });
+                if (response.ok) {
+                    const data = await response.json();
+                    await enterApp(data.username);
+                    return;
+                }
+                let detail = 'Sign-in failed. Please try again.';
+                try {
+                    const parsed = await response.json();
+                    if (parsed && typeof parsed.detail === 'string') detail = parsed.detail;
+                } catch (_) { /* keep the generic message */ }
+                loginError.textContent = detail;
+                loginPassword.value = '';
+                loginPassword.focus();
+            } catch (error) {
+                console.error('Login failed:', error);
+                loginError.textContent = 'Could not reach the server. Please try again.';
+            } finally {
+                loginBtn.disabled = false;
+                loginBtn.removeAttribute('aria-busy');
+            }
+        });
+
+        logoutBtn.addEventListener('click', async () => {
+            try {
+                await fetch(`${API_BASE_URL}/auth/logout`, { method: 'POST' });
+            } catch (error) {
+                console.error('Logout failed:', error);
+            }
+            showLogin();
+        });
+
         // --- Main Functions ---
+        async function loadLanguages() {
+            const result = await fetchApi('/languages');
+            languages = result || [];
+            languagesById = Object.fromEntries(languages.map(l => [l.id, l]));
+
+            languageSelect.innerHTML = '';
+            languageSelect.add(new Option('Auto-detect from file extension', 'auto'));
+            languages.forEach(l => {
+                const text = l.available
+                    ? `${l.label} (${l.extensions.join(', ')})`
+                    : `${l.label} (not installed)`;
+                const option = new Option(text, l.id);
+                option.disabled = !l.available;
+                languageSelect.add(option);
+            });
+
+            const missing = languages.filter(l => !l.available).map(l => l.label);
+            runtimeSummary.textContent = missing.length
+                ? `Runtimes not installed in the backend image: ${missing.join(', ')}.`
+                : '';
+        }
+
         async function refreshScripts() {
             const scripts = await fetchApi('/scripts');
             scriptsTableBody.innerHTML = '';
+            scriptsById = {};
             if (!scripts) return;
 
             scripts.forEach(script => {
+                scriptsById[script.id] = script;
+                const isInline = !!(script.code && script.code.trim());
+                const lineCount = isInline ? script.code.trim().split('\n').length : 0;
+                const source = isInline
+                    ? `<em title="${esc(script.code.slice(0, 300))}">inline (${lineCount} line${lineCount === 1 ? '' : 's'})</em>`
+                    : `<code>${esc(script.command)}</code>`;
+
                 const row = document.createElement('tr');
                 row.innerHTML = `
-                    <td>${script.name}</td>
-                    <td>${script.schedule || 'Not scheduled'}</td>
-                    <td><code>${script.command}</code></td>
+                    <td>${esc(script.name)}</td>
+                    <td><span class="lang-badge">${esc(languageLabel(script.language))}</span></td>
+                    <td>${source}</td>
+                    <td>${script.schedule ? `<code>${esc(script.schedule)}</code>` : '<span class="muted">Not scheduled</span>'}</td>
                     <td>
                         <span class="${script.enabled ? 'text-success' : 'text-error'}">${script.enabled ? 'Enabled' : 'Disabled'}</span>
                     </td>
                     <td>
-                        <button class="outline" onclick="runScript(${script.id})">Run</button>
-                        <button class="outline" onclick="viewLogs(${script.id}, '${script.name}')">Logs</button>
-                        <button class="secondary outline" onclick="editScript(${script.id})">Edit</button>
-                        <button class="contrast outline" onclick="deleteScript(${script.id})">Delete</button>
+                        <div class="actions">
+                            <button class="outline" onclick="runScript(${script.id})">Run</button>
+                            <button class="outline" onclick="viewLogs(${script.id})">Logs</button>
+                            <button class="secondary outline" onclick="editScript(${script.id})">Edit</button>
+                            <button class="contrast outline" onclick="deleteScript(${script.id})">Delete</button>
+                        </div>
                     </td>
                 `;
                 scriptsTableBody.appendChild(row);
@@ -189,18 +489,19 @@
         }
 
         async function runScript(id) {
-            await fetchApi(`/scripts/${id}/run`, { method: 'POST' });
-            alert('Script execution started. Check logs for output.');
+            const result = await fetchApi(`/scripts/${id}/run`, { method: 'POST' });
+            if (result) alert('Script execution started. Check logs for output.');
             refreshScripts();
         }
 
-        async function viewLogs(id, name) {
+        async function viewLogs(id) {
+            const name = scriptsById[id] ? scriptsById[id].name : `#${id}`;
             logsTitle.textContent = `Logs for "${name}"`;
             logsContent.textContent = 'Loading...';
             logsDialog.showModal();
             const logs = await fetchApi(`/scripts/${id}/logs`);
             if (logs && logs.length > 0) {
-                logsContent.textContent = logs.map(log => 
+                logsContent.textContent = logs.map(log =>
 `Run at: ${new Date(log.started_at).toLocaleString()}
 Finished at: ${log.finished_at ? new Date(log.finished_at).toLocaleString() : 'N/A'}
 Exit Code: ${log.exit_code}
@@ -218,13 +519,17 @@ ${log.stderr || '(empty)'}`
             const script = await fetchApi(`/scripts/${id}`);
             if (!script) return;
 
+            scriptForm.reset();
             document.getElementById('script-id').value = script.id;
             document.getElementById('name').value = script.name;
-            document.getElementById('command').value = script.command;
+            commandInput.value = script.command || '';
+            codeInput.value = script.code || '';
             document.getElementById('schedule').value = script.schedule || '';
             document.getElementById('env').value = script.env || '';
             document.getElementById('enabled').checked = script.enabled;
-            
+            languageSelect.value = script.language || 'auto';
+            setMode(script.code && script.code.trim() ? 'inline' : 'file');
+
             dialogTitle.textContent = 'Edit Script';
             scriptDialog.showModal();
         }
@@ -239,27 +544,50 @@ ${log.stderr || '(empty)'}`
         scriptForm.addEventListener('submit', async (event) => {
             event.preventDefault();
             const id = document.getElementById('script-id').value;
-            const formData = new FormData(scriptForm);
-            const payload = Object.fromEntries(formData.entries());
-            
-            // Handle checkbox
-            payload.enabled = document.getElementById('enabled').checked;
+            const mode = currentMode();
+            const language = languageSelect.value;
+
+            const payload = {
+                name: document.getElementById('name').value.trim(),
+                language: language === 'auto' ? null : language,
+                command: mode === 'file' ? commandInput.value.trim() : null,
+                code: mode === 'inline' ? codeInput.value : null,
+                schedule: document.getElementById('schedule').value.trim() || null,
+                env: document.getElementById('env').value.trim() || null,
+                enabled: document.getElementById('enabled').checked,
+            };
 
             const endpoint = id ? `/scripts/${id}` : '/scripts';
             const method = id ? 'PUT' : 'POST';
 
-            await fetchApi(endpoint, {
+            const result = await fetchApi(endpoint, {
                 method: method,
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
             });
 
+            if (!result) return; // keep the dialog open so the user can fix the error
             scriptDialog.close();
             refreshScripts();
         });
 
-        // Initial load
-        document.addEventListener('DOMContentLoaded', refreshScripts);
+        // Initial load: resume an existing session or show the login card.
+        document.addEventListener('DOMContentLoaded', async () => {
+            let status = null;
+            try {
+                const response = await fetch(`${API_BASE_URL}/auth/status`);
+                if (response.ok) status = await response.json();
+            } catch (error) {
+                console.error('Could not check the session:', error);
+            }
+            if (status && status.authenticated) {
+                await enterApp(status.username);
+            } else if (status) {
+                showLogin(null, status.users_configured);
+            } else {
+                showLogin('Could not reach the server. Please reload the page.');
+            }
+        });
     </script>
 </body>
 </html>

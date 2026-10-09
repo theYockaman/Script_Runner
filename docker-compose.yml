@@ -3,7 +3,10 @@ services:
     build: .
     image: script-runner:latest
     ports:
-      - '8080:8080'
+      - '8005:8080'
+    env_file:
+      - path: .env
+        required: false
     volumes:
       - ./app:/app/app
       - ./scripts:/app/scripts
@@ -14,6 +17,6 @@ services:
   frontend:
     build: ./frontend
     ports:
-      - '3000:80'
+      - '3015:80'
     depends_on:
       - backend

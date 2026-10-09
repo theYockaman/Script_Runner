@@ -9,6 +9,7 @@ from app import main as app_main
 
 
 CLIENT = TestClient(app_main.app)
+assert CLIENT.post("/api/auth/login", json={"username": "tester", "password": "testpass"}).status_code == 200
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = ROOT / "scripts"
 
@@ -22,14 +23,21 @@ def make_executable(p: Path):
     p.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
 
-def poll_for_runs(script_id: int, timeout: int = 10):
+def poll_for_runs(script_id: int, timeout: int = 10, min_runs: int = 1):
+    """Return finished runs (newest first) once at least `min_runs` have finished.
+
+    Runs are executed on a background thread, so a Run row exists before its
+    exit code is known; waiting for finished_at avoids asserting on None.
+    """
     deadline = time.time() + timeout
     while time.time() < deadline:
         r = CLIENT.get(f"/api/scripts/{script_id}/logs")
-        if r.status_code == 200 and len(r.json()) > 0:
-            return r.json()
-        time.sleep(0.5)
-    raise AssertionError("No runs appeared within timeout")
+        if r.status_code == 200:
+            finished = [run for run in r.json() if run["finished_at"] is not None]
+            if len(finished) >= min_runs:
+                return finished
+        time.sleep(0.25)
+    raise AssertionError("No finished runs appeared within timeout")
 
 
 def test_run_various_scripts_and_retries():
@@ -79,7 +87,7 @@ def test_run_various_scripts_and_retries():
     sid = scripts['bash-echo']['id']
     CLIENT.post(f"/api/scripts/{sid}/run")
     CLIENT.post(f"/api/scripts/{sid}/run")
-    runs = poll_for_runs(sid, timeout=15)
+    runs = poll_for_runs(sid, timeout=15, min_runs=2)
     # expect at least 2 runs total
     assert len(runs) >= 2
 
@@ -126,7 +134,7 @@ date >> {marker_path.as_posix()}
     time.sleep(3)
 
     # Check that the script has run multiple times by polling logs
-    runs = poll_for_runs(script_id, timeout=5)
+    runs = poll_for_runs(script_id, timeout=5, min_runs=2)
     assert len(runs) >= 2, "Script should have run at least twice on schedule"
     assert all(run['exit_code'] == 0 for run in runs)
 
@@ -191,12 +199,12 @@ def test_run_python_and_bash():
     # Add scripts to the db
     bash_payload = {
         "name": "bash-test-script",
-        "command": str(bash_script_path.relative_to(ROOT)),
+        "command": f"/app/scripts/{bash_script_path.name}",
         "enabled": True
     }
     python_payload = {
         "name": "python-test-script",
-        "command": str(python_script_path.relative_to(ROOT)),
+        "command": f"/app/scripts/{python_script_path.name}",
         "enabled": True
     }
 
